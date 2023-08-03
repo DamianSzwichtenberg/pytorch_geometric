@@ -179,7 +179,8 @@ def run(args: argparse.ArgumentParser):
 
                         model = get_model(
                             model_name, params,
-                            metadata=data.metadata() if hetero else None)
+                            metadata=data.metadata() if hetero else None,
+                            with_custom_inference=True)
                         model = model.to(device)
                         # TODO: Migrate to ModelHubMixin.
                         if args.ckpt_path:

@@ -1,8 +1,10 @@
 import os
 import os.path as osp
 from datetime import datetime
+from typing import Optional, Union
 
 import torch
+from torch import Tensor
 from ogb.nodeproppred import PygNodePropPredDataset
 from tqdm import tqdm
 
@@ -11,6 +13,7 @@ from torch_geometric.data import HeteroData
 from torch_geometric.datasets import OGB_MAG, Reddit
 from torch_geometric.nn import GAT, GCN, PNA, EdgeCNN, GraphSAGE
 from torch_geometric.utils import index_to_mask
+from torch_geometric.loader import NeighborLoader
 
 from .hetero_gat import HeteroGAT
 from .hetero_sage import HeteroGraphSAGE
@@ -34,6 +37,98 @@ models_dict = {
     'rgat': HeteroGAT,
     'rgcn': HeteroGraphSAGE,
 }
+
+
+class BatchedLoader:
+    def __init__(self, loader, device):
+        self.cache_capacity = min(int(os.environ.get('GNN_CACHE_SIZE', 8)), len(loader))
+        self.steps = len(loader) // self.cache_capacity
+        self.left = len(loader)
+        self.iter = iter(loader)
+        self.device = device
+        self.cache = []
+        self.batch_id = 0
+
+        self.cache_batch()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self.cache:
+            raise StopIteration
+        elif self.batch_id == len(self.cache):
+            self.batch_id = 0
+            self.cache = []
+            raise StopIteration
+        else:
+            batch_id = self.batch_id
+            self.batch_id += 1
+            return self.cache[batch_id]
+
+    def __len__(self):
+        return self.steps
+
+    def cache_batch(self, non_blocking=False):
+        if self.left == 0:
+            return
+        cache_size = min(self.left, self.cache_capacity)
+        for _ in range(cache_size):
+            batch = next(self.iter)
+            if hasattr(batch, 'adj_t'):
+                batch.adj_t = batch.adj_t.to(self.device, non_blocking=non_blocking)
+            else:
+                batch.edge_index = batch.edge_index.to(self.device, non_blocking=non_blocking)
+            self.cache.append(batch)
+        self.left -= cache_size
+
+    def synchronize(self):
+        torch.xpu.synchronize()
+
+
+@torch.no_grad()
+def inference_xpu(
+    self,
+    loader: NeighborLoader,
+    device: Optional[Union[str, torch.device]] = None,
+    embedding_device: Union[str, torch.device] = 'cpu',
+    progress_bar: bool = False,
+) -> Tensor:
+    # ignore `embedding_device`, we know that data will fit into PVC memory
+    if progress_bar:
+        pbar = tqdm(total=len(self.convs) * len(loader))
+        pbar.set_description('Inference')
+
+    x_all = loader.data.x.to(device)
+
+    for i in range(self.num_layers):
+        xs = []
+        batched_loader = BatchedLoader(loader, device)
+        # at this stage first batch is ready
+        for _ in range(len(batched_loader)):
+            # load next batch asynchronously, to overlap with computations
+            batched_loader.cache_batch(non_blocking=True)
+            for batch in batched_loader:
+                x = x_all[batch.n_id].to(device)
+                if hasattr(batch, 'adj_t'):
+                    edge_index = batch.adj_t
+                else:
+                    edge_index = batch.edge_index
+                x = self.inference_per_layer(i, x, edge_index, batch.batch_size)
+                xs.append(x)
+
+                if progress_bar:
+                    pbar.update(1)
+
+            # wait for the data, so it will be available when next iteration of computations is performed
+            batched_loader.synchronize()
+
+        x_all = torch.cat(xs, dim=0)
+
+    if progress_bar:
+        pbar.close()
+
+    return x_all
 
 
 def get_dataset_with_transformation(name, root, use_sparse_tensor=False,
@@ -86,8 +181,10 @@ def get_dataset(name, root, use_sparse_tensor=False, bf16=False):
     return data, num_classes
 
 
-def get_model(name, params, metadata=None):
+def get_model(name, params, metadata=None, with_custom_inference=False):
     Model = models_dict.get(name, None)
+    if with_custom_inference:
+        Model.inference = inference_xpu
     assert Model is not None, f'Model {name} not supported!'
 
     if name == 'rgat':
