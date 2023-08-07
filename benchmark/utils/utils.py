@@ -1,6 +1,7 @@
 import os
 import os.path as osp
 from datetime import datetime
+from enum import Enum
 from typing import Optional, Union
 
 import torch
@@ -39,51 +40,46 @@ models_dict = {
 }
 
 
-class BatchedLoader:
+class DataSource(Enum):
+    LOADER = 1
+    CACHE = 2
+
+
+class CachedLoader:
     def __init__(self, loader, device):
-        self.cache_capacity = min(int(os.environ.get('GNN_CACHE_SIZE', 8)), len(loader))
-        self.steps = len(loader) // self.cache_capacity
-        self.left = len(loader)
+        self.source = DataSource.LOADER
+        self.steps = len(loader)
         self.iter = iter(loader)
         self.device = device
+        self.counter = 0
         self.cache = []
-        self.batch_id = 0
-
-        self.cache_batch()
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        if not self.cache:
-            raise StopIteration
-        elif self.batch_id == len(self.cache):
-            self.batch_id = 0
-            self.cache = []
+        if self.counter == self.steps:
+            self.iter = iter(self.cache)
+            self.source = DataSource.CACHE
+            self.counter = 0
             raise StopIteration
         else:
-            batch_id = self.batch_id
-            self.batch_id += 1
-            return self.cache[batch_id]
+            return self.batch()
 
-    def __len__(self):
-        return self.steps
-
-    def cache_batch(self, non_blocking=False):
-        if self.left == 0:
-            return
-        cache_size = min(self.left, self.cache_capacity)
-        for _ in range(cache_size):
+    def batch(self):
+        self.counter += 1
+        if self.source == DataSource.LOADER:
             batch = next(self.iter)
+            n_id = batch.n_id.to(self.device)
             if hasattr(batch, 'adj_t'):
-                batch.adj_t = batch.adj_t.to(self.device, non_blocking=non_blocking)
+                edge_index = batch.adj_t.to(self.device)
             else:
-                batch.edge_index = batch.edge_index.to(self.device, non_blocking=non_blocking)
+                edge_index = batch.edge_index.to(self.device)
+            batch = (n_id, edge_index, batch.batch_size)
             self.cache.append(batch)
-        self.left -= cache_size
-
-    def synchronize(self):
-        torch.xpu.synchronize()
+            return batch
+        else:
+            return next(self.iter)
 
 
 @torch.no_grad()
@@ -101,27 +97,16 @@ def inference_xpu(
 
     x_all = loader.data.x.to(device)
 
+    cached_loader = CachedLoader(loader, device)
     for i in range(self.num_layers):
         xs = []
-        batched_loader = BatchedLoader(loader, device)
-        # at this stage first batch is ready
-        for _ in range(len(batched_loader)):
-            # load next batch asynchronously, to overlap with computations
-            batched_loader.cache_batch(non_blocking=True)
-            for batch in batched_loader:
-                x = x_all[batch.n_id].to(device)
-                if hasattr(batch, 'adj_t'):
-                    edge_index = batch.adj_t
-                else:
-                    edge_index = batch.edge_index
-                x = self.inference_per_layer(i, x, edge_index, batch.batch_size)
-                xs.append(x)
+        for n_id, edge_index, bs in cached_loader:
+            x = x_all[n_id]
+            x = self.inference_per_layer(i, x, edge_index, bs)
+            xs.append(x)
 
-                if progress_bar:
-                    pbar.update(1)
-
-            # wait for the data, so it will be available when next iteration of computations is performed
-            batched_loader.synchronize()
+            if progress_bar:
+                pbar.update(1)
 
         x_all = torch.cat(xs, dim=0)
 
