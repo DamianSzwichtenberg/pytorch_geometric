@@ -18,7 +18,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.nn import Linear
 
 from torch_geometric.datasets import JODIEDataset
-from torch_geometric.loader import TemporalDataLoader
+from torch_geometric.loader import TemporalDataLoader, NeighborLoader
 from torch_geometric.nn import TGNMemory, TransformerConv
 from torch_geometric.nn.models.tgn import (
     IdentityMessage,
@@ -26,32 +26,48 @@ from torch_geometric.nn.models.tgn import (
     LastNeighborLoader,
 )
 
+# TODO(DamianSzwichtenberg): remove this when temporal datasets will
+# work with `Data`
+from torch_geometric.data import Data, TemporalData
+
+
+def temporal_to_data(temporal_data: TemporalData) -> Data:
+    edge_index = torch.stack((temporal_data.src, temporal_data.dst))
+    return Data(edge_index=edge_index, edge_attr=temporal_data.msg,
+                time=temporal_data.t, y=temporal_data.y)
+
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', 'JODIE')
 dataset = JODIEDataset(path, name='wikipedia')
 data = dataset[0]
 
+# TODO(DamianSzwichtenberg): remove this when temporal datasets will
+# work with `Data`
+data = temporal_to_data(data)
 # For small datasets, we can put the whole dataset on GPU and thus avoid
 # expensive memory transfer costs for mini-batches:
 data = data.to(device)
 
-train_data, val_data, test_data = data.train_val_test_split(
+train_data, val_data, test_data = data.train_val_test_split_time(
     val_ratio=0.15, test_ratio=0.15)
 
+# TODO(DamianSzwichtenberg): replace with NeighborLoader
+train_loader = NeighborLoader()
 train_loader = TemporalDataLoader(
     train_data,
-    batch_size=200,
+    batch_size=10,
     neg_sampling_ratio=1.0,
 )
 val_loader = TemporalDataLoader(
     val_data,
-    batch_size=200,
+    batch_size=10,
     neg_sampling_ratio=1.0,
 )
 test_loader = TemporalDataLoader(
     test_data,
-    batch_size=200,
+    batch_size=10,
     neg_sampling_ratio=1.0,
 )
 neighbor_loader = LastNeighborLoader(data.num_nodes, size=10, device=device)

@@ -308,6 +308,25 @@ class BaseData:
             store.up_to(end_time)
         return out
 
+    def train_val_test_split_time(
+            self, val_ratio: float = 0.15,
+            test_ratio: float = 0.15) -> Tuple[Self, Self, Self]:
+        r"""Splits the data in training, validation and test sets according to
+        time.
+        """
+        assert val_ratio >= 0. and val_ratio <= 1.
+        assert test_ratio >= 0. and test_ratio <= 1.
+        assert val_ratio + test_ratio < 1.
+
+        out = self.sort_by_time()
+        val_time, test_time = np.quantile(
+            out.time.numpy(), [1 - val_ratio - test_ratio, 1 - test_ratio])
+        train_data = out.snapshot(0, val_time)
+        val_data = out.snapshot(val_time, test_time)
+        test_data = out.snapshot(test_time, out.time.max())
+
+        return train_data, val_data, test_data
+
     def has_isolated_nodes(self) -> bool:
         r"""Returns :obj:`True` if the graph contains isolated nodes."""
         return any([store.has_isolated_nodes() for store in self.edge_stores])

@@ -568,3 +568,15 @@ def test_data_time_handling(num_nodes, num_edges):
 
     out = out.sort_by_time()
     assert torch.equal(out.time, data.time.repeat_interleave(2))
+
+    # TODO(DamianSzwichtenberg): add new asserts
+    val_ratio = 0.375
+    test_ratio = 0.125
+    train_data, val_data, test_data = data.train_val_test_split_time(
+        val_ratio=val_ratio, test_ratio=test_ratio)
+    assert train_data.num_edges == round(
+        (1. - val_ratio - test_ratio) * num_edges)
+    assert val_data.num_edges == round(val_ratio * num_edges)
+    assert test_data.num_edges == round(test_ratio * num_edges)
+    assert val_data.time.min() >= train_data.time.max()
+    assert test_data.time.min() >= val_data.time.max()

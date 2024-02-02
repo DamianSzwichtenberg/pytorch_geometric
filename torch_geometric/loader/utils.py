@@ -412,3 +412,23 @@ def infer_filter_per_worker(data: Any) -> bool:
     logging.debug(f"Inferred 'filter_per_worker={out}' option for feature "
                   f"fetching routines of the data loader")
     return out
+
+
+# TODO(DamianSzwichtenberg): Add docs.
+class NegSampler:
+    def __init__(self, data: Data, neg_sampling_ratio: float) -> None:
+        self.neg_sampling_ratio = neg_sampling_ratio
+        self.min_dst = int(data.edge_index[-1].min())
+        self.max_dst = int(data.edge_index[-1].max())
+
+    def __call__(self, batch: Data) -> Data:
+        # TODO(DamianSzwichtenberg): Finish implementation and verify
+        # correctness in combination with `NeighborLoader` (maybe ask
+        # Matthias about it).
+        batch.neg_dst = torch.randint(
+            low=self.min_dst,
+            high=self.max_dst + 1,
+            size=round(self.neg_sampling_ratio * batch.edge_index.size(1), ),
+            dtype=batch.edge_index.dtype,
+            device=batch.edge_index.device,
+        )

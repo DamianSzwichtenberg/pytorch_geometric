@@ -135,7 +135,10 @@ class BaseStorage(MutableMapping):
     def __copy__(self) -> Self:
         out = self.__class__.__new__(self.__class__)
         for key, value in self.__dict__.items():
-            out.__dict__[key] = value
+            # TODO(DamianSzwichtenberg): this fix should be pushed in separate
+            # PR to PyG
+            if key != '_cached_attr':
+                out.__dict__[key] = value
         out._mapping = copy.copy(out._mapping)
         return out
 
@@ -780,7 +783,6 @@ class GlobalStorage(NodeStorage, EdgeStorage):
     def is_node_attr(self, key: str) -> bool:
         if '_cached_attr' not in self.__dict__:
             self._cached_attr: Dict[AttrType, Set[str]] = defaultdict(set)
-
         if key in self._cached_attr[AttrType.NODE]:
             return True
         if key in self._cached_attr[AttrType.EDGE]:
