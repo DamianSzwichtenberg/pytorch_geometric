@@ -3,7 +3,7 @@ from typing import Callable, List, Optional
 import numpy as np
 import torch
 
-from torch_geometric.data import InMemoryDataset, TemporalData, download_url
+from torch_geometric.data import Data, InMemoryDataset, download_url
 
 
 class MyketDataset(InMemoryDataset):
@@ -55,7 +55,7 @@ class MyketDataset(InMemoryDataset):
     ) -> None:
         super().__init__(root, transform, pre_transform,
                          force_reload=force_reload)
-        self.load(self.processed_paths[0], data_cls=TemporalData)
+        self.load(self.processed_paths[0], data_cls=Data)
 
     @property
     def raw_file_names(self) -> List[str]:
@@ -83,7 +83,7 @@ class MyketDataset(InMemoryDataset):
 
         dst = dst + (int(src.max()) + 1)
 
-        data = TemporalData(src=src, dst=dst, t=t, msg=msg)
+        data = Data(edge_index=torch.stack([src, dst], dim=0), edge_attr=msg, time=t)
 
         if self.pre_transform is not None:
             data = self.pre_transform(data)

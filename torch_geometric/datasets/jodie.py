@@ -3,7 +3,7 @@ from typing import Callable, Optional
 
 import torch
 
-from torch_geometric.data import InMemoryDataset, TemporalData, download_url
+from torch_geometric.data import Data, InMemoryDataset, download_url
 
 
 class JODIEDataset(InMemoryDataset):
@@ -75,7 +75,7 @@ class JODIEDataset(InMemoryDataset):
 
         super().__init__(root, transform, pre_transform,
                          force_reload=force_reload)
-        self.load(self.processed_paths[0], data_cls=TemporalData)
+        self.load(self.processed_paths[0], data_cls=Data)
 
     @property
     def raw_dir(self) -> str:
@@ -108,7 +108,7 @@ class JODIEDataset(InMemoryDataset):
         y = torch.from_numpy(df.iloc[:, 3].values).to(torch.long)
         msg = torch.from_numpy(df.iloc[:, 4:].values).to(torch.float)
 
-        data = TemporalData(src=src, dst=dst, t=t, msg=msg, y=y)
+        data = Data(edge_index=torch.stack([src, dst], dim=0), edge_attr=msg, time=t, y=y)
 
         if self.pre_transform is not None:
             data = self.pre_transform(data)

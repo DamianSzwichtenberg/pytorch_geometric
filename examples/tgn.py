@@ -17,6 +17,7 @@ import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.nn import Linear
 
+from torch_geometric.data import Data, TemporalData
 from torch_geometric.datasets import JODIEDataset
 from torch_geometric.loader import TemporalDataLoader
 from torch_geometric.nn import TGNMemory, TransformerConv
@@ -31,6 +32,21 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', 'JODIE')
 dataset = JODIEDataset(path, name='wikipedia')
 data = dataset[0]
+
+
+# TODO(DamianSzwichtenberg): Remove this once TemporalDataLoader is
+# replaced with NeighborLoader.
+def data_to_temporal(data: Data) -> TemporalData:
+    required_args = ['edge_index', 'edge_attr', 'time']
+    kwargs = {
+        key: getattr(data, key)
+        for key in set(data.keys()) - set(required_args)
+    }
+    return TemporalData(src=data.edge_index[0], dst=data.edge_index[1],
+                        t=data.time, msg=data.edge_attr, **kwargs)
+
+
+data = data_to_temporal(data)
 
 # For small datasets, we can put the whole dataset on GPU and thus avoid
 # expensive memory transfer costs for mini-batches:
